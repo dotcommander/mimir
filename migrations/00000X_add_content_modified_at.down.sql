@@ -1,0 +1,1 @@
+ALTER TABLE content DROP COLUMN IF EXISTS modified_at;

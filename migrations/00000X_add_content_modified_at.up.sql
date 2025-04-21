@@ -1,0 +1,1 @@
+ALTER TABLE content ADD COLUMN modified_at TIMESTAMP NULL;

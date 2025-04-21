@@ -1,0 +1,179 @@
+version: "3"
+
+vars:
+  BIN: mimir
+  GO_ENV: GO111MODULE=on GOPATH=
+  TESTARGS: ""
+  ARGS: ""
+  DB_HOST: 127.0.0.1
+  DB_PORT: 5432
+  DB_USER: root
+  DB_NAME: mimir
+
+tasks:
+  default:
+    desc: Displays a list of all available tasks defined in this Taskfile.
+    cmds:
+      - task --list
+
+  vendor:
+    desc: Vendor dependencies
+    cmds:
+      - echo "Vendoring..."
+      - "{{.GO_ENV}} go mod vendor"
+
+  tidy:
+    desc: Cleans up go.mod, updates dependencies, and vendors them locally.
+    cmds:
+      - "{{.GO_ENV}} go mod tidy"
+      - "{{.GO_ENV}} go mod vendor"
+
+  build:
+    desc: Compiles the main Mimir CLI application (./cmd/mimir) into an executable named 'mimir'.
+    cmds:
+      - echo "Building {{.BIN}}..."
+      - go build -o {{.BIN}} ./cmd/mimir
+      - chmod +x {{.BIN}}
+      - echo "Done"
+    generates:
+      - mimir
+
+  build-all:
+    desc: Compiles all Go applications found within the ./cmd directory into the ./bin directory.
+    cmds:
+      - mkdir -p bin
+      - |
+        for d in ./cmd/*; do
+          if [ -d "$$d" ]; then
+            name=$(basename "$$d")
+            echo "Building $$name..."
+            {{.GO_ENV}} go build -mod=vendor -o bin/$$name $$d
+          fi
+        done
+
+  run:
+    desc: Executes the compiled Mimir CLI application with specified arguments (use ARGS=...).
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} {{.ARGS}}
+
+  serve:
+    desc: Starts the Mimir API server using the compiled application (use ARGS=... for server flags).
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} serve {{.ARGS}}
+
+  worker:
+    desc: Starts the Mimir background job worker using the compiled application.
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} worker
+
+  fmt:
+    desc: Formats Go source code using 'go fmt'.
+    cmds:
+      - go fmt ./...
+
+  lint:
+    desc: golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  lint-fix:
+    desc: Formats Go code using 'go fmt' and fixes imports using 'goimports'.
+    cmds:
+      - go fmt ./...
+      - goimports -w .
+
+  check:
+    desc: "Runs a comprehensive suite of checks: formatting (fmt), static analysis (vet), linting, and unit tests."
+    cmds:
+      - go fmt ./...
+      - go vet ./...
+      - golangci-lint run ./...
+      - "{{.GO_ENV}} go test -mod=vendor ./..."
+
+  test-build:
+    desc: Builds the Mimir CLI specifically for running tests, ensuring dependencies are vendored.
+    deps: [vendor]
+    cmds:
+      - "{{.GO_ENV}} go build -mod=vendor -o mimir ./cmd/mimir"
+
+  test:
+    desc: Executes all unit tests (excluding integration tests) using the vendored dependencies. Use TESTARGS=... for test flags.
+    deps: [test-build]
+    cmds:
+      - "{{.GO_ENV}} go test -mod=vendor ./... -v {{.TESTARGS}}"
+
+  test-integration:
+    desc: Executes only the integration tests (tagged with 'integration'). Requires external services like DB/Redis to be running.
+    deps: [test-build]
+    cmds:
+      - "{{.GO_ENV}} go test -mod=vendor -tags=integration ./... -v {{.TESTARGS}}"
+
+  coverage:
+    desc: Runs unit tests and generates a code coverage report (coverage.out) and function coverage summary.
+    deps: [test-build]
+    cmds:
+      - "{{.GO_ENV}} go test -mod=vendor ./... -coverprofile=coverage.out -covermode=atomic"
+      - "{{.GO_ENV}} go tool cover -func=coverage.out"
+
+  migrate:
+    desc: Applies the initial database schema migration (migrations/001_init.sql) to the configured PostgreSQL database.
+    cmds:
+      - psql -v ON_ERROR_STOP=1 -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d {{.DB_NAME}} -f migrations/001_init.sql
+
+  reset:
+    desc: DANGER ZONE! Drops the existing database, recreates it, applies migrations, and flushes Asynq keys from Redis.
+    cmds:
+      - psql -v ON_ERROR_STOP=1 -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{{.DB_NAME}}' AND pid <> pg_backend_pid();"
+      - psql -v ON_ERROR_STOP=1 -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d postgres -c "DROP DATABASE IF EXISTS {{.DB_NAME}};"
+      - psql -v ON_ERROR_STOP=1 -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d postgres -c "CREATE DATABASE {{.DB_NAME}};"
+      - task: migrate
+      - redis-cli KEYS "asynq:*" | xargs -r redis-cli DEL
+
+  batch-demo:
+    desc: "Runs a quick demonstration: adds a file, runs the worker briefly to process it, then lists batch jobs."
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} add --input promo.md --source local --title promo
+      - |
+        ./{{.BIN}} worker & WORKER_PID=$$!; \
+        sleep 5; \
+        kill $$WORKER_PID || echo stopped; \
+        wait $$WORKER_PID || echo done;
+      - ./{{.BIN}} batch list
+
+  release:
+    desc: Builds the application, creates a timestamped Git tag (e.g., vYYYY.MM.DD.HHMMSS), and pushes the tag.
+    cmds:
+      - task: build
+      - git tag -a "v$(date +%Y.%m.%d.%H%M%S)" -m "Automated release"
+      - git push --tags
+
+  db-dump:
+    desc: Creates a SQL dump of the current Mimir database state into 'mimir_dump.sql'.
+    cmds:
+      - pg_dump -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d {{.DB_NAME}} -f mimir_dump.sql
+
+  db-load:
+    desc: 'Loads a previously created SQL dump ("mimir_dump.sql") into the Mimir database. WARNING: Overwrites existing data.'
+    cmds:
+      - psql -U {{.DB_USER}} -h {{.DB_HOST}} -p {{.DB_PORT}} -d {{.DB_NAME}} -f mimir_dump.sql
+
+  clean:
+    desc: Removes build artifacts (executable, ./bin directory, ./vendor directory) and cleans Go build cache.
+    cmds:
+      - rm -f {{.BIN}}
+      - rm -rf bin vendor
+      - "{{.GO_ENV}} go clean"
+
+  clean-cache:
+    desc: Cleans various Go caches (build, module, test) more aggressively.
+    cmds:
+      - go clean -cache -modcache -testcache -x
+
+  aider:
+    desc: Run aider with architect and DeepSeek models
+    cmds:
+      - aider --architect --model openrouter/deepseek/deepseek-r1 --editor-model openrouter/deepseek/deepseek-chat

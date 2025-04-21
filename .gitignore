@@ -1,0 +1,33 @@
+# Aider-specific files
+.aider*
+
+# Documentation/Spec files (Consider if these should be tracked in Git instead)
+repomix.md
+SPECS.md
+
+# Local data/cache
+chromem_data/
+
+# Compiled executables
+mimir
+worker
+serve
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Dependency directories (if using modules)
+/vendor/
+
+# Build outputs
+bin/
+
+# Task & Test outputs
+mimir_dump.sql
+coverage.out
+profile.out
+.repomix*
+config.yaml
+repomix*

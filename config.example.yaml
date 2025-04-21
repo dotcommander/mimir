@@ -1,0 +1,114 @@
+# Example configuration for Mimir
+# Copy this file to config.yaml and fill in your actual values.
+# Sensitive values like DSNs and API keys should ideally be set via environment variables.
+# Ensure config.yaml is listed in your .gitignore file to prevent committing secrets.
+
+database:
+  primary:
+    # Data Source Name (DSN) for the primary PostgreSQL database
+    # Example: "postgresql://user:password@host:port/database?sslmode=disable"
+    # Recommended: Set via environment variable PRIMARY_DB_DSN
+    DSN: "${PRIMARY_DB_DSN:-postgresql://root@localhost:5432/mimir?sslmode=disable}" # Default matches Taskfile vars
+    pool:
+      max_connections: 20
+      min_connections: 2
+      max_idle_time: 30m
+
+  vector:
+    # Requires the pgvector extension to be installed in the database.
+    # Data Source Name (DSN) for the vector PostgreSQL database (can be the same as primary)
+    # Example: "postgresql://user:password@host:port/database?sslmode=disable"
+    # Recommended: Set via environment variable VECTOR_DB_DSN
+    DSN: "${VECTOR_DB_DSN:-postgresql://root@localhost:5432/mimir?sslmode=disable}" # Default matches Taskfile vars
+    index_params:
+      lists: 1000 # Example pgvector IVFFlat index parameter (adjust based on your index type)
+      probes: 20  # Example pgvector IVFFlat index parameter (adjust based on your index type)
+
+embedding:
+  providers:
+    openai:
+      enabled: true
+      model: "text-embedding-3-small"
+      # API Key: Set the OPENAI_API_KEY environment variable. DO NOT hardcode it here unless for testing.
+      api_key: "${OPENAI_API_KEY}" # Required if enabled
+      dimension: 1536
+      batch_api: true
+      rate_limit: 3500 # RPM (Requests Per Minute)
+
+    gemini:
+      enabled: true
+      model: "models/embedding-001" # Embedding model
+      generation_model: "gemini-1.5-flash-latest" # Model used for RAG/completion tasks
+      # API Key: Set the GEMINI_API_KEY environment variable. DO NOT hardcode it here unless for testing.
+      api_key: "${GEMINI_API_KEY}" # Required if enabled
+      rate_limit: 3500 # RPM (Requests Per Minute) - Adjust based on Gemini limits
+
+    local: # Example for local embedding provider (adjust as needed)
+      enabled: false
+      model_path: "./models/all-MiniLM-L6-v2" # Path to your local model
+      device: "cpu" # Options: cpu, cuda, mps
+      batch_size: 32
+
+  # Strategy for selecting embedding providers if multiple are enabled
+  # Options: fallback | parallel | lowest_cost
+  strategy: "fallback"
+
+search:
+  default_limit: 10 # Default number of search results to return
+
+redis:
+  # Required for background job processing with Asynq
+  address: "${REDIS_ADDRESS:-localhost:6379}" # Redis server address (host:port)
+  password: "${REDIS_PASSWORD:-}"             # Optional: Set Redis password via env var if needed
+  db: ${REDIS_DB:-0}                           # Redis database number
+
+worker:
+  concurrency: 10 # Number of concurrent background job workers
+  queues:         # Queue configuration with priorities (higher number = higher priority)
+    default: 6
+    low: 1
+
+categorization:
+  type: "llm" # Type of categorization (e.g., llm)
+  provider: "openai" # AI provider to use for categorization
+  model: "gpt-3.5-turbo" # Model to use for categorization
+  # Relative path to the prompt template file within the configured prompt directory (e.g., .config/mimir/prompts)
+  prompt_template: "categorize.txt"
+  auto_apply_tags: true # Automatically apply suggested tags
+
+pricing:
+  # Optional: Define costs per token for different models/providers for cost tracking.
+  # Costs are typically per 1M tokens, so divide by 1,000,000. Example: $0.02 / 1M tokens = $0.00000002 per token
+  openai:
+    text-embedding-3-small:
+      input_per_token: 0.00000002
+      output_per_token: 0.0
+    text-embedding-3-large:
+      input_per_token: 0.00000013
+      output_per_token: 0.0
+    gpt-3.5-turbo: # Check specific model variant costs (e.g., gpt-3.5-turbo-0125)
+      input_per_token: 0.0000005 # Example: $0.50 / 1M input tokens
+      output_per_token: 0.0000015 # Example: $1.50 / 1M output tokens
+    gpt-4: # Example costs, check specific model variant (e.g., gpt-4-turbo)
+      input_per_token: 0.00003
+      output_per_token: 0.00006
+  gemini:
+    # Costs are often per character for Gemini models. VERIFY OFFICIAL PRICING. These are examples.
+    # Example calculation: $0.125 / 1M input chars = $0.000000125 / char
+    # Example calculation: $0.375 / 1M output chars = $0.000000375 / char
+    gemini-1.5-flash-latest: # Replace with the actual model used in 'embedding.providers.gemini.generation_model'
+      input_per_char: 0.000000125 # Placeholder - VERIFY ACTUAL COST
+      output_per_char: 0.000000375 # Placeholder - VERIFY ACTUAL COST
+  # Add other providers/models as needed
+
+summarization:
+  enabled: true # Set to true to enable automatic summarization of added content
+  provider: "openai" # AI provider for summarization
+  model: "gpt-3.5-turbo" # Model for summarization
+  # Relative path to the prompt template file within the configured prompt directory (e.g., .config/mimir/prompts)
+  prompt: "summarize.txt"
+
+rag:
+  # Configuration for Retrieval-Augmented Generation (Answer generation)
+  completion_provider: "gemini" # Provider to use for generating answers (must be enabled in embedding.providers)
+  prompt_template: "rag_answer.txt" # Relative path to the RAG prompt template within the prompt directory
